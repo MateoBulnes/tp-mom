@@ -13,6 +13,7 @@ from .middleware import (
 
 DEFAULT_AMQP_PORT = 5672
 DEFAULT_EXCHANGE_TYPE = "direct"
+CONSUMER_PREFETCH_COUNT = 1
 
 # Cubren todo lo que puede venir del transporte
 _TRANSPORT_ERRORS = (
@@ -50,10 +51,27 @@ class _RabbitMQMiddleware(MessageMiddleware):
         raise NotImplementedError("TODO")
 
     def start_consuming(self, on_message_callback):
-        raise NotImplementedError("TODO")
+        # pika entrega los mensajes con su propia firma de 4 args, mientras que la interfaz espera 3. 
+        # dispatch funciona como un adaptador entre las 2, pasa el body tal cual y arma los 2 callables de confirmación.
+        def _dispatch(channel, method, props, body):
+            on_message_callback(body,
+                                lambda: channel.basic_ack(method.delivery_tag),
+                                lambda: channel.basic_nack(method.delivery_tag, requeue=True))
+
+        try:
+            self._channel.basic_qos(prefetch_count=CONSUMER_PREFETCH_COUNT)
+            self._channel.basic_consume(queue=self._queue_name,
+                                        on_message_callback=_dispatch,
+                                        auto_ack=False)
+            self._channel.start_consuming()
+        except _TRANSPORT_ERRORS as error:
+            _raise_domain_error(error)
 
     def stop_consuming(self):
-        raise NotImplementedError("TODO")
+        try:
+            self._channel.stop_consuming()
+        except _TRANSPORT_ERRORS as error: 
+            _raise_domain_error(error)
 
     def close(self):
         try:
@@ -84,6 +102,14 @@ class MessageMiddlewareQueueRabbitMQ(_RabbitMQMiddleware, MessageMiddlewareQueue
                 auto_delete=False)
         except _TRANSPORT_ERRORS as error:
             self.close()
+            _raise_domain_error(error)
+
+    def send(self, message):
+        try:
+            self._channel.basic_publish(exchange="",
+                                        routing_key=self._queue_name, 
+                                        body=message)
+        except _TRANSPORT_ERRORS as error:
             _raise_domain_error(error)
 
 
