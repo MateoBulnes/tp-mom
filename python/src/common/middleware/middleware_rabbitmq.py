@@ -47,9 +47,6 @@ class _RabbitMQMiddleware(MessageMiddleware):
         except _TRANSPORT_ERRORS as error:
             _raise_domain_error(error)
 
-    def send(self, message):
-        raise NotImplementedError("TODO")
-
     def start_consuming(self, on_message_callback):
         # pika entrega los mensajes con su propia firma de 4 args, mientras que la interfaz espera 3. 
         # dispatch funciona como un adaptador entre las 2, pasa el body tal cual y arma los 2 callables de confirmación.
@@ -114,7 +111,7 @@ class MessageMiddlewareQueueRabbitMQ(_RabbitMQMiddleware, MessageMiddlewareQueue
 
 
 class MessageMiddlewareExchangeRabbitMQ(_RabbitMQMiddleware, MessageMiddlewareExchange):
-    """Hereda la implementación de _RabbitMQMiddleware y el contrato de MessageMiddlewareQueue."""
+    """Hereda la implementación de _RabbitMQMiddleware y el contrato de MessageMiddlewareExchange."""
 
     def __init__(self, host, exchange_name, routing_keys):
         super().__init__(host)
@@ -126,6 +123,23 @@ class MessageMiddlewareExchangeRabbitMQ(_RabbitMQMiddleware, MessageMiddlewareEx
                 exchange=exchange_name,
                 exchange_type=DEFAULT_EXCHANGE_TYPE,
                 durable=False)
+
+            result = self._channel.queue_declare(queue="", exclusive=True, durable=False)
+            self._queue_name = result.method.queue
+
+            for routing_key in self._routing_keys:
+                self._channel.queue_bind(queue=self._queue_name,
+                                         exchange=exchange_name,
+                                         routing_key=routing_key)
         except _TRANSPORT_ERRORS as error:
             self.close()
+            _raise_domain_error(error)
+
+    def send(self, message):
+        try:
+            for routing_key in self._routing_keys:
+                self._channel.basic_publish(exchange=self._exchange_name,
+                                            routing_key=routing_key,
+                                            body=message)
+        except _TRANSPORT_ERRORS as error:
             _raise_domain_error(error)
